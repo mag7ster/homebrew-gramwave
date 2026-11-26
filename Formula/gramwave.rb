@@ -1,14 +1,15 @@
 class Gramwave < Formula
   desc "Read-only Telegram music player for Linux"
   homepage "https://github.com/mag7ster/gramwave"
-  url "https://github.com/mag7ster/gramwave/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "abb597a5c631785ba231f0efc4fbd751f02080b5ae20fa485e40ef83ca847626"
+  url "https://github.com/mag7ster/gramwave/archive/refs/tags/v0.2.0.tar.gz"
+  sha256 "809d46cc1ef27c9e3a68190c6cdf5f7891a7da9e5fff3821db11ebfa1053236f"
   license "MIT"
 
   bottle do
-    root_url "https://raw.githubusercontent.com/mag7ster/homebrew-gramwave/bottle-v0.1.0"
-    sha256 cellar: :any, x86_64_linux: "661f93d848368cb44385a64c3c07ba467d69662182fb0ad42d1fe53833c12d67"
+    root_url "https://raw.githubusercontent.com/mag7ster/homebrew-gramwave/bottle-v0.2.0"
+    sha256 cellar: :any, x86_64_linux: "87c95b67230cef83c29b500c7e787fc3b80df416586701f8d200183ed55ddda4"
   end
+
 
   depends_on :linux
   depends_on "pkgconf" => :build
