@@ -27,7 +27,15 @@ class Gramwave < Formula
 
   def install
     ENV["GRAMWAVE_TDLIB_DIR"] = dep("gramwave-tdlib").opt_prefix
-    system "cargo", "install", "--no-default-features", *std_cargo_args(features: "mpv,telegram,vulkan")
+    features = %w[mpv telegram vulkan]
+    if version.to_s == "0.1.0"
+      system "cargo", "install", "--no-default-features", *std_cargo_args(features:)
+    else
+      staging = buildpath/"cargo-install"
+      features << "release-branding"
+      system "cargo", "install", "--no-default-features", *std_cargo_args(root: staging, features:)
+      bin.install staging/"bin/gramwave-dev" => "gramwave"
+    end
     (share/"applications").install "assets/gramwave.desktop"
     (share/"icons/hicolor/scalable/apps").install "assets/gramwave.svg"
   end
