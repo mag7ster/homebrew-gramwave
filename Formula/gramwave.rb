@@ -4,12 +4,7 @@ class Gramwave < Formula
   url "https://github.com/mag7ster/gramwave/archive/refs/tags/v0.2.0.tar.gz"
   sha256 "809d46cc1ef27c9e3a68190c6cdf5f7891a7da9e5fff3821db11ebfa1053236f"
   license "MIT"
-
-  bottle do
-    root_url "https://raw.githubusercontent.com/mag7ster/homebrew-gramwave/bottle-v0.2.0"
-    sha256 cellar: :any, x86_64_linux: "87c95b67230cef83c29b500c7e787fc3b80df416586701f8d200183ed55ddda4"
-  end
-
+  revision 1
 
   depends_on :linux
   depends_on "pkgconf" => :build
@@ -17,7 +12,7 @@ class Gramwave < Formula
   depends_on "ffmpeg"
   depends_on "glib"
   depends_on "mag7ster/gramwave/gramwave-tdlib"
-  depends_on "mpv"
+  depends_on "mag7ster/gramwave/gramwave-mpv"
   depends_on "wayland"
 
   deny_network_access!
@@ -28,6 +23,7 @@ class Gramwave < Formula
 
   def install
     ENV["GRAMWAVE_TDLIB_DIR"] = dep("gramwave-tdlib").opt_prefix
+    ENV["MPV_LIBRARY_DIR"] = dep("gramwave-mpv").opt_lib
     features = %w[mpv telegram vulkan]
     if version.to_s == "0.1.0"
       system "cargo", "install", "--no-default-features", *std_cargo_args(features:)

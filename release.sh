@@ -4,89 +4,222 @@ set -euo pipefail
 tap_repo=git@github.com:mag7ster/homebrew-gramwave.git
 source_root=https://github.com/mag7ster/gramwave/archive/refs/tags
 bottle_root=https://raw.githubusercontent.com/mag7ster/homebrew-gramwave
+image=ghcr.io/homebrew/brew:7.0.16
 export GIT_TERMINAL_PROMPT=0
 
-build_bottle() {
-  local output=$1 root_url=$2 credentials=$3
-  podman run --rm --platform linux/amd64 --userns=keep-id -v "$output:/work:Z" \
-    -v "$credentials:/run/gramwave-telegram.conf:ro,Z" \
-    ghcr.io/homebrew/brew:7.0.16 /bin/bash -euo pipefail -c '
+build_bottles() {
+  podman run --rm --platform linux/amd64 --userns=keep-id -v "$1:/work:Z" \
+    "$image" /bin/bash -euo pipefail -c '
       test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.39"
       export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_MAKE_JOBS=4
+      brew tap mag7ster/gramwave /work/tap
       brew trust --tap mag7ster/gramwave
-      brew tap mag7ster/gramwave
-      cp /work/gramwave.rb "$(brew --repository mag7ster/gramwave)/Formula/gramwave.rb"
-      brew install mag7ster/gramwave/gramwave-tdlib
-      HOMEBREW_GRAMWAVE_TELEGRAM_CONFIG=/run/gramwave-telegram.conf \
-        brew install --build-bottle mag7ster/gramwave/gramwave
-      brew test mag7ster/gramwave/gramwave
-      brew linkage --test mag7ster/gramwave/gramwave
-      cd /work
-      brew bottle --no-rebuild --root-url="$1" mag7ster/gramwave/gramwave | tee bottle.log
-    ' bash "$root_url"
+      tap=$(brew --repository mag7ster/gramwave)
+      cd /work/bottles
+
+      for name in gramwave-tdlib gramwave-mpv gramwave; do
+        formula=mag7ster/gramwave/$name
+        if grep -q "^  bottle do$" "$tap/Formula/$name.rb"; then
+          brew install "$formula"
+        else
+          HOMEBREW_GRAMWAVE_TELEGRAM_CONFIG=/work/telegram.conf brew install --build-bottle "$formula"
+          brew bottle --no-rebuild --json --root-url="$1" "$formula"
+          brew bottle --merge --write --no-commit "$name"--*.bottle.json
+          cp "$tap/Formula/$name.rb" /work/tap/Formula/
+        fi
+        brew test "$formula"
+        brew linkage --test "$formula"
+      done
+
+      if [[ "$2" == check ]]; then
+        mkdir /work/source
+        tar -xf /work/source.tar.gz -C /work/source --strip-components=1
+        cd /work/source
+        tdlib=$(brew --prefix mag7ster/gramwave/gramwave-tdlib)
+        mpv=$(brew --prefix mag7ster/gramwave/gramwave-mpv)
+        export GRAMWAVE_TDLIB_DIR="$tdlib" MPV_LIBRARY_DIR="$mpv/lib"
+        export PATH="$(brew --prefix ffmpeg)/bin:$PATH"
+        export LD_LIBRARY_PATH="$mpv/lib:$tdlib/lib"
+        export CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0
+        cargo test --workspace --locked --no-default-features \
+          --features mpv,telegram,vulkan,native-tests --lib --jobs 4 -- --test-threads=1
+        rm -rf /work/source/target
+      fi
+    ' bash "$2" "$3"
 }
 
-publish_bottle() {
-  local tap=$1 output=$2 tag=$3
-  local version=${tag#v} name block digest blob tree artifact_commit
-  name="gramwave-$version.x86_64_linux.bottle.tar.gz"
-  block=$(sed -n '/^  bottle do$/,/^  end$/p' "$output/bottle.log")
-  digest=$(sed -nE 's/^    sha256 .*x86_64_linux: "([a-f0-9]{64})"$/\1/p' <<<"$block")
-  if [[ -z $digest || $block != *"root_url \"$bottle_root/bottle-$tag\""* ]]; then
-    printf 'Unexpected Homebrew bottle metadata\n' >&2
-    return 1
-  fi
-  local archive="$output/gramwave--$version.x86_64_linux.bottle.tar.gz"
-  printf '%s  %s\n' "$digest" "$archive" | sha256sum --check
-  awk -v block="$block" '{ print } /^  license "MIT"$/ { print ""; print block }' \
-    "$output/gramwave.rb" > "$tap/Formula/gramwave.rb"
-  test "$(grep -c '^  bottle do$' "$tap/Formula/gramwave.rb")" -eq 1
+stage_bottles() {
+  python3 - "$1/bottles" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
 
-  git -C "$tap" add Formula/gramwave.rb
-  git -C "$tap" commit -m "Publish Gramwave $version bottle"
-  blob=$(git -C "$tap" hash-object -w "$archive")
-  tree=$(printf '100644 blob %s\t%s\n' "$blob" "$name" | git -C "$tap" mktree)
-  artifact_commit=$(git -C "$tap" commit-tree "$tree" -m "Gramwave $version Linux x86_64 bottle")
-  git -C "$tap" push --atomic origin HEAD:refs/heads/main "$artifact_commit:refs/tags/bottle-$tag"
+directory = Path(sys.argv[1])
+for metadata in sorted(directory.glob("*.bottle.json")):
+    (entry,) = json.loads(metadata.read_text()).values()
+    bottle = entry["bottle"]["tags"]["x86_64_linux"]
+    source = directory / bottle["local_filename"]
+    with source.open("rb") as archive:
+        if hashlib.file_digest(archive, "sha256").hexdigest() != bottle["sha256"]:
+            raise SystemExit(f"Checksum mismatch for {source}")
+    source.rename(directory / bottle["filename"])
+PY
+}
+
+check_install() {
+  podman run --rm --platform linux/amd64 --userns=keep-id -v "$1:/work:Z" \
+    "$image" /bin/bash -euo pipefail -c '
+      export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1
+      brew tap mag7ster/gramwave /work/tap
+      brew trust --tap mag7ster/gramwave
+      tap=$(brew --repository mag7ster/gramwave)
+      for metadata in /work/bottles/*.bottle.json; do
+        name=${metadata##*/}
+        sed -i "s|^    root_url .*|    root_url \"file:///work/bottles\"|" "$tap/Formula/${name%%--*}.rb"
+      done
+      cellar=$(brew --cellar)
+      mkdir -p "$cellar"
+      baseline=$(du -sB1 "$cellar" | cut -f1)
+      brew list --formula | sort > /tmp/gramwave-before
+
+      brew install mag7ster/gramwave/gramwave
+      brew list --formula | sort > /tmp/gramwave-after
+      comm -13 /tmp/gramwave-before /tmp/gramwave-after | tee /work/installed-formulae.txt
+      deps=$(brew deps --full-name mag7ster/gramwave/gramwave)
+      if grep -Eq "(^|/)(llvm(@[^/]+)?|mesa|mpv)$" <<<"$deps"; then
+        printf "Unexpected dependency in Gramwave runtime tree\n" >&2
+        exit 1
+      fi
+      bytes=$(( $(du -sB1 "$cellar" | cut -f1) - baseline ))
+      printf "Added to Cellar: %s bytes\n" "$bytes" | tee /work/install-size.txt
+      test "$bytes" -le 1342177280
+
+      brew ruby -e "
+        require \"json\"
+        File.foreach(\"/work/installed-formulae.txt\", chomp: true) do |name|
+          receipts = Dir.glob(HOMEBREW_CELLAR/name/\"*/INSTALL_RECEIPT.json\")
+          abort \"Unexpected receipts for #{name}\" unless receipts.one?
+          installed = JSON.parse(File.read(receipts.first))
+          abort \"Installed #{name} from source\" unless installed.fetch(\"poured_from_bottle\")
+        end
+      "
+      for name in gramwave-tdlib gramwave-mpv gramwave; do
+        brew linkage --test "mag7ster/gramwave/$name"
+      done
+
+      gramwave=$(brew --prefix mag7ster/gramwave/gramwave)/bin/gramwave
+      "$gramwave" --version
+      ldd "$gramwave" | tee /work/gramwave-linkage.txt
+      grep -E "libmpv[.]so[.]2 => .*/(opt|Cellar)/gramwave-mpv/" /work/gramwave-linkage.txt
+      grep -E "libtdjson[.]so[.]1[.]8[.]61 => .*/(opt|Cellar)/gramwave-tdlib/" /work/gramwave-linkage.txt
+      brew test mag7ster/gramwave/gramwave
+
+      brew install mpv
+      ldd "$gramwave" | grep -E "libmpv[.]so[.]2 => .*/(opt|Cellar)/gramwave-mpv/"
+    '
+}
+
+publish_bottles() {
+  local tap=$1 bottles=$2 tag=$3 archive blob tree artifact_commit
+  git -C "$tap" add Formula
+  git -C "$tap" commit -m "Publish Gramwave ${tag#v} bottle"
+  shopt -s nullglob
+  tree=$(
+    for archive in "$bottles"/*.bottle.tar.gz; do
+      blob=$(git -C "$tap" hash-object -w "$archive")
+      printf '100644 blob %s\t%s\n' "$blob" "${archive##*/}"
+    done | git -C "$tap" mktree
+  )
+  artifact_commit=$(git -C "$tap" commit-tree "$tree" -m "Gramwave ${tag#v} Linux x86_64 bottles")
+  git -C "$tap" push --atomic "$tap_repo" HEAD:refs/heads/main "$artifact_commit:refs/tags/bottle-$tag"
 }
 
 main() {
+  local mode=publish
+  if [[ ${1:-} == --check ]]; then
+    mode=check
+    shift
+  fi
   if [[ $# != 1 || ! $1 =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    printf 'Usage: %s vMAJOR.MINOR.PATCH\n' "$0" >&2
+    printf 'Usage: %s [--check] vMAJOR.MINOR.PATCH\n' "$0" >&2
     return 2
   fi
-  local tag=$1 version=${1#v} work current source_url digest
+
+  local tag=$1 version=${1#v} work local_tap current source_url digest formula published revision bottle_tag
+  local_tap=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
   work=$(mktemp -d)
-  trap "$(printf 'rm -rf -- %q' "$work")" EXIT
-  git clone --quiet --branch main "$tap_repo" "$work/tap"
-  local formula="$work/tap/Formula/gramwave.rb" output="$work/output"
+  if [[ $mode == check ]]; then
+    printf 'Local bottle build and checks: %s\n' "$work"
+    mkdir -p "$work/tap/Formula"
+    cp "$local_tap"/Formula/*.rb "$work/tap/Formula/"
+    git -C "$work/tap" init -q
+    printf '1\n%032d\n' 0 > "$work/telegram.conf"
+  else
+    trap "$(printf 'rm -rf -- %q' "$work")" EXIT
+    if [[ -n $(git -C "$local_tap" status --porcelain) ]]; then
+      printf 'Commit the tap changes before publishing.\n' >&2
+      return 1
+    fi
+    git clone --quiet "$local_tap" "$work/tap"
+    git -C "$work/tap" fetch --quiet "$tap_repo" main
+    if ! git -C "$work/tap" merge-base --is-ancestor FETCH_HEAD HEAD; then
+      printf 'Update the local tap branch to include published main.\n' >&2
+      return 1
+    fi
+    local config=${GRAMWAVE_TELEGRAM_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/gramwave/telegram.conf}
+    if [[ ! -f $config || ! -r $config || ! -s $config ]]; then
+      printf 'Telegram credentials file is missing, empty, or unreadable at %s\n' "$config" >&2
+      return 1
+    fi
+    install -m 600 -- "$config" "$work/telegram.conf"
+  fi
+  chmod 600 "$work/telegram.conf"
+
+  formula="$work/tap/Formula/gramwave.rb"
   current=$(sed -nE 's@^  url "https://github.com/mag7ster/gramwave/archive/refs/tags/v([0-9.]+)\.tar\.gz"$@\1@p' "$formula")
   if [[ -z $current ]] || ! printf '%s\n' "$current" "$version" | sort -V -C; then
     printf 'Refusing to replace the current formula version %s with %s\n' "$current" "$version" >&2
     return 1
   fi
-  if grep -Fq "root_url \"$bottle_root/bottle-$tag\"" "$formula"; then
-    printf 'Bottle %s is already published.\n' "$tag"
-    return
+  bottle_tag=$tag
+  if [[ $version == "$current" ]]; then
+    revision=$(sed -nE 's/^  revision ([1-9][0-9]*)$/\1/p' "$formula")
+    if [[ -n $revision ]]; then
+      bottle_tag="$tag-r$revision"
+    fi
+  else
+    sed -i -E '/^  revision [0-9]+$/d' "$formula"
   fi
 
-  local config=${GRAMWAVE_TELEGRAM_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/gramwave/telegram.conf}
-  if [[ ! -f $config || ! -r $config || ! -s $config ]]; then
-    printf 'Telegram credentials file is missing, empty, or unreadable at %s\n' "$config" >&2
-    return 1
+  if [[ $mode == publish ]]; then
+    published=$(git ls-remote "$tap_repo" "refs/tags/bottle-$bottle_tag")
+    if [[ -n $published ]]; then
+      printf 'Bottle %s is already published.\n' "$bottle_tag"
+      return
+    fi
   fi
-  install -m 600 -- "$config" "$work/telegram.conf"
-
   source_url="$source_root/$tag.tar.gz"
   curl -fLsS --retry 3 "$source_url" -o "$work/source.tar.gz"
   digest=$(sha256sum "$work/source.tar.gz" | cut -d' ' -f1)
-  mkdir "$output"
-  sed -E -e '/^  bottle do$/,/^  end$/d' \
+  sed -i -E -e '/^  bottle do$/,/^  end$/d' \
     -e "s@^  url \".*\"@  url \"$source_url\"@" \
-    -e "s/^  sha256 \"[a-f0-9]{64}\"$/  sha256 \"$digest\"/" \
-    "$formula" > "$output/gramwave.rb"
-  build_bottle "$output" "$bottle_root/bottle-$tag" "$work/telegram.conf"
-  publish_bottle "$work/tap" "$output" "$tag"
+    -e "s/^  sha256 \"[a-f0-9]{64}\"$/  sha256 \"$digest\"/" "$formula"
+  git -C "$work/tap" add Formula
+  git -C "$work/tap" -c user.name=Gramwave -c user.email=build@gramwave.invalid \
+    commit --allow-empty -qm "Prepare Gramwave $version formulae"
+
+  mkdir "$work/bottles"
+  build_bottles "$work" "$bottle_root/bottle-$bottle_tag" "$mode"
+  stage_bottles "$work"
+  if [[ $mode == check ]]; then
+    git -C "$work/tap" add Formula
+    git -C "$work/tap" -c user.name=Gramwave -c user.email=build@gramwave.invalid \
+      commit -qm "Use locally built bottles"
+    check_install "$work"
+  else
+    publish_bottles "$work/tap" "$work/bottles" "$bottle_tag"
+  fi
 }
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then
