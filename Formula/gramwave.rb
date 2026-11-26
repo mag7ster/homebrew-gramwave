@@ -5,6 +5,11 @@ class Gramwave < Formula
   sha256 "abb597a5c631785ba231f0efc4fbd751f02080b5ae20fa485e40ef83ca847626"
   license "MIT"
 
+  bottle do
+    root_url "https://raw.githubusercontent.com/mag7ster/homebrew-gramwave/bottle-v0.1.0"
+    sha256 cellar: :any, x86_64_linux: "661f93d848368cb44385a64c3c07ba467d69662182fb0ad42d1fe53833c12d67"
+  end
+
   depends_on :linux
   depends_on "pkgconf" => :build
   depends_on "rust" => :build
