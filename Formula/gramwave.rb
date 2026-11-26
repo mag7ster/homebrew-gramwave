@@ -31,6 +31,13 @@ class Gramwave < Formula
     if version.to_s == "0.1.0"
       system "cargo", "install", "--no-default-features", *std_cargo_args(features:)
     else
+      config = ENV["HOMEBREW_GRAMWAVE_TELEGRAM_CONFIG"]
+      if config.to_s.empty?
+        odie "Set HOMEBREW_GRAMWAVE_TELEGRAM_CONFIG to your Telegram credentials file. " \
+             "See https://github.com/mag7ster/gramwave#build-and-run"
+      end
+
+      ENV["GRAMWAVE_TELEGRAM_CONFIG"] = config
       staging = buildpath/"cargo-install"
       features << "release-branding"
       system "cargo", "install", "--no-default-features", *std_cargo_args(root: staging, features:)

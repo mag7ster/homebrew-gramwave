@@ -7,8 +7,9 @@ bottle_root=https://raw.githubusercontent.com/mag7ster/homebrew-gramwave
 export GIT_TERMINAL_PROMPT=0
 
 build_bottle() {
-  local output=$1 root_url=$2
+  local output=$1 root_url=$2 credentials=$3
   podman run --rm --platform linux/amd64 --userns=keep-id -v "$output:/work:Z" \
+    -v "$credentials:/run/gramwave-telegram.conf:ro,Z" \
     ghcr.io/homebrew/brew:7.0.16 /bin/bash -euo pipefail -c '
       test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.39"
       export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_MAKE_JOBS=4
@@ -16,7 +17,8 @@ build_bottle() {
       brew tap mag7ster/gramwave
       cp /work/gramwave.rb "$(brew --repository mag7ster/gramwave)/Formula/gramwave.rb"
       brew install mag7ster/gramwave/gramwave-tdlib
-      brew install --build-bottle mag7ster/gramwave/gramwave
+      HOMEBREW_GRAMWAVE_TELEGRAM_CONFIG=/run/gramwave-telegram.conf \
+        brew install --build-bottle mag7ster/gramwave/gramwave
       brew test mag7ster/gramwave/gramwave
       brew linkage --test mag7ster/gramwave/gramwave
       cd /work
@@ -68,6 +70,13 @@ main() {
     return
   fi
 
+  local config=${GRAMWAVE_TELEGRAM_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/gramwave/telegram.conf}
+  if [[ ! -f $config || ! -r $config || ! -s $config ]]; then
+    printf 'Telegram credentials file is missing, empty, or unreadable at %s\n' "$config" >&2
+    return 1
+  fi
+  install -m 600 -- "$config" "$work/telegram.conf"
+
   source_url="$source_root/$tag.tar.gz"
   curl -fLsS --retry 3 "$source_url" -o "$work/source.tar.gz"
   digest=$(sha256sum "$work/source.tar.gz" | cut -d' ' -f1)
@@ -76,7 +85,7 @@ main() {
     -e "s@^  url \".*\"@  url \"$source_url\"@" \
     -e "s/^  sha256 \"[a-f0-9]{64}\"$/  sha256 \"$digest\"/" \
     "$formula" > "$output/gramwave.rb"
-  build_bottle "$output" "$bottle_root/bottle-$tag"
+  build_bottle "$output" "$bottle_root/bottle-$tag" "$work/telegram.conf"
   publish_bottle "$work/tap" "$output" "$tag"
 }
 
