@@ -15,6 +15,7 @@ build_bottle() {
       brew trust --tap mag7ster/gramwave
       brew tap mag7ster/gramwave
       cp /work/gramwave.rb "$(brew --repository mag7ster/gramwave)/Formula/gramwave.rb"
+      brew install mag7ster/gramwave/gramwave-tdlib
       brew install --build-bottle mag7ster/gramwave/gramwave
       brew test mag7ster/gramwave/gramwave
       brew linkage --test mag7ster/gramwave/gramwave
