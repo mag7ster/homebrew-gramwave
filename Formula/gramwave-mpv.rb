@@ -5,6 +5,11 @@ class GramwaveMpv < Formula
   sha256 "bcfebbfa2b65a6d88dc97ea18117831072373e38b5785a2afb874ed4df5070dd"
   license all_of: ["GPL-2.0-or-later", "LGPL-2.1-or-later"]
 
+  bottle do
+    root_url "https://raw.githubusercontent.com/mag7ster/homebrew-gramwave/bottle-v0.2.0-r1"
+    sha256 cellar: :any, x86_64_linux: "72d8bea9a929ff8095c5efe540f9b94d10644e4f225d35bee6cf419675142ebc"
+  end
+
   keg_only "Gramwave uses a libmpv build with audio output only"
   depends_on :linux
   depends_on "meson" => :build

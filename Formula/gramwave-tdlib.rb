@@ -7,6 +7,11 @@ class GramwaveTdlib < Formula
   license "BSL-1.0"
   revision 2
 
+  bottle do
+    root_url "https://raw.githubusercontent.com/mag7ster/homebrew-gramwave/bottle-v0.2.0-r1"
+    sha256 cellar: :any, x86_64_linux: "e3e5eb4530596d76b1058d14e7ebf2228d7fe1ca7296c5233fd9b0de677a6c03"
+  end
+
   keg_only "Gramwave requires this TDLib version"
   depends_on :linux
   depends_on "cmake" => :build
