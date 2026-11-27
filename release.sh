@@ -17,7 +17,7 @@ build_bottles() {
       tap=$(brew --repository mag7ster/gramwave)
       cd /work/bottles
 
-      for name in gramwave-tdlib gramwave-mpv gramwave; do
+      for name in gramwave-tdlib gramwave; do
         formula=mag7ster/gramwave/$name
         if grep -q "^  bottle do$" "$tap/Formula/$name.rb"; then
           brew install "$formula"
@@ -33,19 +33,20 @@ build_bottles() {
 
       if [[ "$2" == check ]]; then
         mkdir /work/source
-        tar -xf /work/source.tar.gz -C /work/source --strip-components=1
+        tar -xf "/work/$3" -C /work/source --strip-components=1
         cd /work/source
         tdlib=$(brew --prefix mag7ster/gramwave/gramwave-tdlib)
-        mpv=$(brew --prefix mag7ster/gramwave/gramwave-mpv)
-        export GRAMWAVE_TDLIB_DIR="$tdlib" MPV_LIBRARY_DIR="$mpv/lib"
-        export PATH="$(brew --prefix ffmpeg)/bin:$PATH"
-        export LD_LIBRARY_PATH="$mpv/lib:$tdlib/lib"
+        alsa=$(brew --prefix alsa-lib)
+        wayland=$(brew --prefix wayland)
+        export GRAMWAVE_TDLIB_DIR="$tdlib"
+        export PKG_CONFIG_PATH="$alsa/lib/pkgconfig:$wayland/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+        export LD_LIBRARY_PATH="$tdlib/lib:$alsa/lib:$wayland/lib"
         export CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0
         cargo test --workspace --locked --no-default-features \
-          --features mpv,telegram,vulkan,native-tests --lib --jobs 4 -- --test-threads=1
+          --features telegram,vulkan,native-tests --lib --jobs 4 -- --test-threads=1
         rm -rf /work/source/target
       fi
-    ' bash "$2" "$3"
+    ' bash "$2" "$3" "$4"
 }
 
 stage_bottles() {
@@ -87,7 +88,7 @@ check_install() {
       brew list --formula | sort > /tmp/gramwave-after
       comm -13 /tmp/gramwave-before /tmp/gramwave-after | tee /work/installed-formulae.txt
       deps=$(brew deps --full-name mag7ster/gramwave/gramwave)
-      if grep -Eq "(^|/)(llvm(@[^/]+)?|mesa|mpv)$" <<<"$deps"; then
+      if grep -Eq "(^|/)(llvm(@[^/]+)?|mesa|ffmpeg(@[^/]+)?|mpv|gramwave-mpv)$" <<<"$deps"; then
         printf "Unexpected dependency in Gramwave runtime tree\n" >&2
         exit 1
       fi
@@ -104,26 +105,26 @@ check_install() {
           abort \"Installed #{name} from source\" unless installed.fetch(\"poured_from_bottle\")
         end
       "
-      for name in gramwave-tdlib gramwave-mpv gramwave; do
+      for name in gramwave-tdlib gramwave; do
         brew linkage --test "mag7ster/gramwave/$name"
       done
 
       gramwave=$(brew --prefix mag7ster/gramwave/gramwave)/bin/gramwave
-      "$gramwave" --version
+      test "$("$gramwave" --version)" = "gramwave $1"
       ldd "$gramwave" | tee /work/gramwave-linkage.txt
-      grep -E "libmpv[.]so[.]2 => .*/(opt|Cellar)/gramwave-mpv/" /work/gramwave-linkage.txt
+      grep -E "libasound[.]so[.]2 => /" /work/gramwave-linkage.txt
       grep -E "libtdjson[.]so[.]1[.]8[.]61 => .*/(opt|Cellar)/gramwave-tdlib/" /work/gramwave-linkage.txt
+      if grep -Eq "lib(mpv|avcodec|avformat|avutil|swresample|swscale)[.]so" /work/gramwave-linkage.txt; then
+        printf "Unexpected media library in Gramwave linkage\n" >&2
+        exit 1
+      fi
+      test -x "$(brew --prefix glib)/bin/gio"
       brew test mag7ster/gramwave/gramwave
-
-      brew install mpv
-      ldd "$gramwave" | grep -E "libmpv[.]so[.]2 => .*/(opt|Cellar)/gramwave-mpv/"
-    '
+    ' bash "$2"
 }
 
 publish_bottles() {
   local tap=$1 bottles=$2 tag=$3 archive blob tree artifact_commit
-  git -C "$tap" add Formula
-  git -C "$tap" commit -m "Publish Gramwave ${tag#v} bottle"
   shopt -s nullglob
   tree=$(
     for archive in "$bottles"/*.bottle.tar.gz; do
@@ -141,12 +142,13 @@ main() {
     mode=check
     shift
   fi
-  if [[ $# != 1 || ! $1 =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    printf 'Usage: %s [--check] vMAJOR.MINOR.PATCH\n' "$0" >&2
+  if [[ $# -lt 1 || $# -gt 2 || ! $1 =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ || ( $mode == publish && $# != 1 ) ]]; then
+    printf 'Usage: %s vMAJOR.MINOR.PATCH or %s --check vMAJOR.MINOR.PATCH [source-archive]\n' "$0" "$0" >&2
     return 2
   fi
 
   local tag=$1 version=${1#v} work local_tap current source_url digest formula published revision bottle_tag
+  local source_archive="gramwave-${1#v}.tar.gz"
   local_tap=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
   work=$(mktemp -d)
   if [[ $mode == check ]]; then
@@ -200,8 +202,13 @@ main() {
     fi
   fi
   source_url="$source_root/$tag.tar.gz"
-  curl -fLsS --retry 3 "$source_url" -o "$work/source.tar.gz"
-  digest=$(sha256sum "$work/source.tar.gz" | cut -d' ' -f1)
+  if [[ $# == 2 ]]; then
+    cp -- "$2" "$work/$source_archive"
+    source_url="file:///work/$source_archive"
+  else
+    curl -fLsS --retry 3 "$source_url" -o "$work/$source_archive"
+  fi
+  digest=$(sha256sum "$work/$source_archive" | cut -d' ' -f1)
   sed -i -E -e '/^  bottle do$/,/^  end$/d' \
     -e "s@^  url \".*\"@  url \"$source_url\"@" \
     -e "s/^  sha256 \"[a-f0-9]{64}\"$/  sha256 \"$digest\"/" "$formula"
@@ -210,14 +217,13 @@ main() {
     commit --allow-empty -qm "Prepare Gramwave $version formulae"
 
   mkdir "$work/bottles"
-  build_bottles "$work" "$bottle_root/bottle-$bottle_tag" "$mode"
+  build_bottles "$work" "$bottle_root/bottle-$bottle_tag" "$mode" "$source_archive"
   stage_bottles "$work"
-  if [[ $mode == check ]]; then
-    git -C "$work/tap" add Formula
-    git -C "$work/tap" -c user.name=Gramwave -c user.email=build@gramwave.invalid \
-      commit -qm "Use locally built bottles"
-    check_install "$work"
-  else
+  git -C "$work/tap" add Formula
+  git -C "$work/tap" -c user.name=Gramwave -c user.email=build@gramwave.invalid \
+    commit -qm "Publish Gramwave ${bottle_tag#v} bottle"
+  check_install "$work" "$version"
+  if [[ $mode == publish ]]; then
     publish_bottles "$work/tap" "$work/bottles" "$bottle_tag"
   fi
 }

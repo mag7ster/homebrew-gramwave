@@ -10,8 +10,8 @@ brew install mag7ster/gramwave/gramwave
 
 Homebrew uses the Gramwave bottle on compatible Linux x86_64 systems. New
 bottles include Gramwave's Telegram API credentials. Sign in by QR or phone.
-The tap builds TDLib 1.8.61 with GCC and ships a separate audio-focused libmpv
-bottle. The mpv build retains ALSA, PulseAudio and PipeWire output.
+The tap ships TDLib 1.8.61. Gramwave 0.3.0 uses Rodio and Symphonia for
+playback, with ALSA for audio output.
 
 For a source build on x86_64 without a compatible bottle, set
 `HOMEBREW_GRAMWAVE_TELEGRAM_CONFIG` to the absolute path of your own credentials
@@ -23,13 +23,22 @@ With Podman, Python 3.11 or later and the tap checked out, run the local release
 check against a Gramwave source tag.
 
 ```sh
-./release.sh --check v0.2.0
+./release.sh --check v0.3.0
 ```
 
 The check uses a synthetic Telegram API pair. It builds and tests the packages
 in the Homebrew Ubuntu 24.04 x86_64 container, then pours the bottles in a fresh
 container. The script prints the directory containing the bottles, checksums,
 installed formula list and measured Cellar growth.
+
+To check an unpublished source commit, create a Git archive and pass its
+absolute path as the second argument.
+
+```sh
+git -C /path/to/gramwave archive --format=tar.gz --prefix=gramwave-0.3.0/ \
+  -o /tmp/gramwave-0.3.0.tar.gz HEAD
+./release.sh --check v0.3.0 /tmp/gramwave-0.3.0.tar.gz
+```
 
 ## Publish a release
 
@@ -43,10 +52,11 @@ Push the Gramwave source tag first. Commit the tap changes locally on a branch
 that includes the current tap `main`. Run the script with the new source tag.
 
 ```sh
-./release.sh v0.2.1
+./release.sh v0.3.0
 ```
 
-The script pushes updated formulae and a new bottle tag atomically. Existing
+The script verifies installation in a fresh container and pushes updated
+formulae and a new bottle tag atomically. Existing
 dependency bottle blocks are reused. When changing one of the dependency
 builds, increment its formula revision unless the upstream version changes, and
 remove its bottle block so the script builds and publishes a replacement. A

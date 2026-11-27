@@ -12,12 +12,12 @@ class Gramwave < Formula
   end
 
   depends_on :linux
+  depends_on "cmake" => :build
   depends_on "pkgconf" => :build
   depends_on "rust" => :build
-  depends_on "ffmpeg"
+  depends_on "alsa-lib"
   depends_on "glib"
   depends_on "mag7ster/gramwave/gramwave-tdlib"
-  depends_on "mag7ster/gramwave/gramwave-mpv"
   depends_on "wayland"
 
   deny_network_access!
@@ -28,23 +28,17 @@ class Gramwave < Formula
 
   def install
     ENV["GRAMWAVE_TDLIB_DIR"] = dep("gramwave-tdlib").opt_prefix
-    ENV["MPV_LIBRARY_DIR"] = dep("gramwave-mpv").opt_lib
-    features = %w[mpv telegram vulkan]
-    if version.to_s == "0.1.0"
-      system "cargo", "install", "--no-default-features", *std_cargo_args(features:)
-    else
-      config = ENV["HOMEBREW_GRAMWAVE_TELEGRAM_CONFIG"]
-      if config.to_s.empty?
-        odie "Set HOMEBREW_GRAMWAVE_TELEGRAM_CONFIG to your Telegram credentials file. " \
-             "See https://github.com/mag7ster/gramwave#build-and-run"
-      end
-
-      ENV["GRAMWAVE_TELEGRAM_CONFIG"] = config
-      staging = buildpath/"cargo-install"
-      features << "release-branding"
-      system "cargo", "install", "--no-default-features", *std_cargo_args(root: staging, features:)
-      bin.install staging/"bin/gramwave-dev" => "gramwave"
+    config = ENV["HOMEBREW_GRAMWAVE_TELEGRAM_CONFIG"]
+    if config.to_s.empty?
+      odie "Set HOMEBREW_GRAMWAVE_TELEGRAM_CONFIG to your Telegram credentials file. " \
+           "See https://github.com/mag7ster/gramwave#build-and-run"
     end
+
+    ENV["GRAMWAVE_TELEGRAM_CONFIG"] = config
+    staging = buildpath/"cargo-install"
+    features = %w[audio webm-emoji telegram vulkan release-branding]
+    system "cargo", "install", "--no-default-features", *std_cargo_args(root: staging, features:)
+    bin.install staging/"bin/gramwave-dev" => "gramwave"
     (share/"applications").install "assets/gramwave.desktop"
     (share/"icons/hicolor/scalable/apps").install "assets/gramwave.svg"
   end
